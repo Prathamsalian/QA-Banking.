@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QA Bank – Demo Banking App</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<style>
+:root{--bg:#f1f5f9;--cd:#fff;--tx:#0f172a;--mu:#64748b;--bd:#cbd5e1;--pr:#1d4ed8;--er:#b91c1c;--eb:#fee2e2;--ok:#166534;--ob:#dcfce7;--wb:#fef3c7;--wt:#92400e;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1220;--cd:#16203a;--tx:#e2e8f0;--mu:#94a3b8;--bd:#334155;--pr:#60a5fa;--er:#fca5a5;--eb:#450a0a;--ok:#86efac;--ob:#052e16;--wb:#451a03;--wt:#fcd34d;color-scheme:dark}}
+html,body{height:auto}body{background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.card{background:var(--cd);border:1px solid var(--bd);border-radius:12px;padding:1.1rem}
+.inp{width:100%;background:var(--cd);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:.5rem .7rem}
+.inp[aria-invalid=true]{border-color:var(--er)}.lb{display:block;font-size:.8rem;font-weight:600;margin:.6rem 0 .2rem}
+.err{color:var(--er);font-size:.78rem;min-height:1rem;margin-top:.15rem}.mu{color:var(--mu);font-size:.8rem}
+.btn,.btn2{border-radius:8px;padding:.5rem 1rem;font-weight:600;font-size:.9rem;cursor:pointer}.btn{background:var(--pr);color:#fff}.btn2{border:1px solid var(--bd);color:var(--tx)}
+.btn:hover{filter:brightness(1.1)}a.lk{color:var(--pr);cursor:pointer;text-decoration:underline;font-size:.85rem}
+.bn{border-radius:8px;padding:.6rem .8rem;margin-bottom:.8rem;font-size:.88rem}.bn.er{background:var(--eb);color:var(--er)}.bn.ok{background:var(--ob);color:var(--ok)}.bn.wn{background:var(--wb);color:var(--wt)}
+table{width:100%;font-size:.82rem;border-collapse:collapse}th,td{text-align:left;padding:.5rem;border-bottom:1px solid var(--bd);white-space:nowrap}
+.bg{border-radius:99px;padding:.1rem .55rem;font-size:.72rem;font-weight:700}.Success{background:var(--ob);color:var(--ok)}.Failed{background:var(--eb);color:var(--er)}.Pending{background:var(--wb);color:var(--wt)}
+.ov{position:fixed;inset:0;background:#0009;display:flex;align-items:center;justify-content:center;padding:1rem;z-index:50}
+nav a{display:block;padding:.5rem .8rem;border-radius:8px;white-space:nowrap;cursor:pointer;font-size:.9rem}nav a.on{background:var(--pr);color:#fff}
+</style></head>
+<body><div id="app"></div>
+<script>
+/* ===== DATA LAYER (localStorage = "database"; swap for Express/SQLite if desired) ===== */
+const $=s=>document.querySelector(s),K='qabank_db',S='qabank_sess';
+const LIM={pend:100000,daily:500000,wd:50000,minBal:500,minDep:500,maxDep:200000};
+let db,flash=null;
+const save=()=>{try{localStorage.setItem(K,JSON.stringify(db))}catch(e){}};
+const hp=p=>{let h=5381;for(const c of 'qb$'+p)h=(h*33)^c.charCodeAt(0);return(h>>>0).toString(16)}; // demo-only hash
+const inr=n=>'₹'+Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
+const dt=t=>new Date(t).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+const mask=a=>'ACC-••••••'+a.slice(-4);
+function newAcc(){let a;do a='ACC-'+(1e9+Math.floor(Math.random()*9e9));while(db.users.some(u=>u.acc===a));return a}
+function addTx(uid,desc,amt,type,cat,status,ref){db.txs.push({id:'TXN'+(100000+db.seq++),uid,ts:Date.now(),desc,amt,type,cat,status,ref:ref||null})}
+function mkUser(d){const u={id:'u'+Date.now()+Math.floor(Math.random()*999),name:d.name,email:d.email.toLowerCase(),phone:d.phone,dob:d.dob,addr:d.addr,type:d.type||'Savings',acc:newAcc(),branch:'THN001',ifsc:'QABK0000101',balance:0,pass:hp(d.pw),failed:0,locked:false,notif:{email:true,sms:false},bn:[]};db.users.push(u);if(+d.dep>0){u.balance=+d.dep;addTx(u.id,'Initial deposit',+d.dep,'Credit','Deposit','Success')}return u}
+function load(){try{db=JSON.parse(localStorage.getItem(K))}catch(e){}if(!db||!db.users)seed()}
+function seed(){db={users:[],txs:[],resets:{},seq:1};mkUser({name:'Alice Demo',email:'alice@demo.com',phone:'9876543210',dob:'1995-04-12',addr:'12 Lake Road, Thane, Maharashtra',pw:'Demo@1234',dep:50000});mkUser({name:'Bob Demo',email:'bob@demo.com',phone:'9123456780',dob:'1992-09-30',addr:'45 Hill View, Mumbai, Maharashtra',type:'Checking',pw:'Demo@1234',dep:25000});save()}
+const avail=u=>u.balance-db.txs.filter(t=>t.uid===u.id&&t.type==='Debit'&&t.status==='Pending').reduce((s,t)=>s+t.amt,0);
+const byId=i=>db.users.find(u=>u.id===i);
+const find=v=>{v=v.trim();return db.users.find(u=>u.email===v.toLowerCase()||u.acc===v.toUpperCase())};
+function settle(ref,ok){db.txs.filter(t=>t.ref===ref&&t.status==='Pending').forEach(t=>{if(ok){byId(t.uid).balance+=t.type==='Credit'?t.amt:-t.amt;t.status='Success'}else t.status='Failed'});save()}
+/* ===== SESSION ===== */
+const getS=()=>{try{return JSON.parse(sessionStorage.getItem(S)||localStorage.getItem(S))}catch(e){return null}};
+function setS(id,rem){const s=JSON.stringify({id,exp:Date.now()+(rem?7*864e5:30*6e4)});try{(rem?localStorage:sessionStorage).setItem(S,s)}catch(e){}}
+const clrS=()=>{try{sessionStorage.removeItem(S);localStorage.removeItem(S)}catch(e){}};
+function cur(){const s=getS();if(!s)return null;if(Date.now()>s.exp){clrS();return null}return byId(s.id)||null}
+/* ===== VALIDATION ===== */
+const V={name:v=>/^[A-Za-z][A-Za-z .'-]{2,59}$/.test(v)||'Enter 3–60 letters; digits are not allowed.',
+email:v=>/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(v)||'Enter a valid email, e.g. name@example.com.',
+phone:v=>/^[6-9]\d{9}$/.test(v)||'Phone must be 10 digits starting with 6–9.',
+pass:v=>/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,64}$/.test(v)||'Min 8 chars with upper, lower, digit and special character.',
+addr:v=>v.length>=10||'Address must be at least 10 characters.',
+ifsc:v=>/^[A-Z]{4}0[A-Z0-9]{6}$/.test(v)||'IFSC format: 4 letters, 0, 6 alphanumerics (e.g. QABK0000101).',
+req:v=>!!v||'This field is required.',
+amt:v=>{if(v==='')return'Amount is required.';const n=Number(v);if(isNaN(n))return'Amount must be a number.';if(n<=0)return'Amount must be greater than zero.';return/^\d+(\.\d{1,2})?$/.test(v)||'Maximum 2 decimal places allowed.'},
+dob:v=>{if(!v)return'Date of birth is required.';const d=new Date(v),n=new Date();if(isNaN(d)||d>n)return'Enter a valid past date.';let a=n.getFullYear()-d.getFullYear();if(n<new Date(n.getFullYear(),d.getMonth(),d.getDate()))a--;return a>=18||'You must be at least 18 years old.'}};
+const run=(d,r)=>{const e={};for(const k in r){const x=r[k](d[k]||'',d);if(x!==true&&x)e[k]=x}return e};
+const D=f=>{const o={};new FormData(f).forEach((v,k)=>o[k]=/ass|pw/i.test(k)?v:String(v).trim());return o};
+function E(f,e){f.querySelectorAll('.err').forEach(p=>p.textContent='');f.querySelectorAll('.inp').forEach(i=>i.removeAttribute('aria-invalid'));let first;for(const k in e){const p=f.querySelector('#e_'+k);if(p){p.textContent=e[k];const i=f.querySelector('#'+k);if(i){i.setAttribute('aria-invalid','true');first=first||i}}}if(first)first.focus();return Object.keys(e).length>0}
+/* ===== UI HELPERS ===== */
+const F=(n,l,t='text',x='')=>`<div><label class="lb" for="${n}">${l}</label><input class="inp" id="${n}" name="${n}" type="${t}" ${x}><p class="err" id="e_${n}"></p></div>`;
+const Bn=(t,m)=>`<div class="bn ${t}" role="alert">${m}</div>`;
+const msg=(t,m)=>{const e=$('#msg');if(e){e.innerHTML=m?Bn(t,m):'';if(m)e.scrollIntoView({block:'nearest'})}};
+const bad=(f,e)=>{if(E(f,e)){msg('er','Please correct the highlighted fields.');return true}msg('');return false};
+function ask(t,cb){const o=document.createElement('div');o.className='ov';o.innerHTML=`<div class="card" role="dialog" aria-modal="true" style="max-width:26rem;width:100%"><h3 class="font-semibold mb-2">Please confirm</h3><div class="mb-4 text-sm">${t}</div><div class="flex gap-2 justify-end"><button class="btn2" id="cn">Cancel</button><button class="btn" id="cy">Confirm</button></div></div>`;document.body.append(o);o.querySelector('#cn').onclick=()=>o.remove();o.querySelector('#cy').onclick=()=>{o.remove();cb()}}
+const go=h=>{location.hash=h};
+/* ===== PUBLIC PAGES ===== */
+const wrap=(t,sub,body)=>`<div class="min-h-screen flex items-center justify-center p-4"><div class="w-full max-w-md"><div class="text-center mb-4"><div class="text-2xl font-bold" style="color:var(--pr)">🏦 QA Bank</div><div class="mu">Demo app for manual testing practice</div></div><div class="card"><h1 class="text-lg font-semibold">${t}</h1><div class="mu mb-2">${sub}</div><div id="msg">${flash?Bn(flash[0],flash[1]):''}</div>${body}</div></div></div>`;
+const PUB={
+login:()=>wrap('Sign in','Use your email or account number',`<form id="fLogin" novalidate>${F('lid','Email or Account Number','text','autocomplete="username"')}${F('lpw','Password','password','autocomplete="current-password"')}<label class="text-sm"><input type="checkbox" name="rem" id="rem"> Remember me</label><button class="btn w-full mt-3">Sign in</button></form><div class="flex justify-between mt-3"><a class="lk" href="#forgot">Forgot password?</a><a class="lk" href="#register">Open an account</a></div><div class="mu mt-4" style="border-top:1px solid var(--bd);padding-top:.6rem">Demo logins (password <b>Demo@1234</b>):<br>${db.users.slice(0,2).map(u=>`${esc(u.email)} · ${u.acc}`).join('<br>')}<br><a class="lk" data-act="reset">Reset all demo data</a></div>`),
+register:()=>wrap('Open an account','All fields are mandatory',`<form id="fReg" novalidate>${F('name','Full Name')}${F('email','Email','email')}${F('phone','Phone Number','tel','maxlength="10"')}${F('dob','Date of Birth','date')}${F('addr','Address')}<label class="lb" for="type">Account Type</label><select class="inp" id="type" name="type"><option>Savings</option><option>Checking</option></select><p class="err"></p>${F('dep','Initial Deposit (₹, min '+LIM.minDep+')','text','inputmode="decimal"')}${F('pw','Password','password','autocomplete="new-password"')}${F('pw2','Confirm Password','password','autocomplete="new-password"')}<button class="btn w-full mt-2">Create account</button></form><a class="lk block mt-3" href="#login">Back to sign in</a>`),
+forgot:()=>wrap('Forgot password','We’ll send a reset token (simulated inbox)',`<form id="fForgot" novalidate>${F('femail','Registered Email','email')}<button class="btn w-full">Send reset token</button></form><div id="inbox"></div><a class="lk block mt-3" href="#reset">I already have a token</a> · <a class="lk" href="#login">Back</a>`),
+reset:()=>wrap('Reset password','Token is valid for 10 minutes; a reset also unlocks the account',`<form id="fReset" novalidate>${F('remail','Email','email')}${F('tok','6-digit Token','text','maxlength="6" inputmode="numeric"')}${F('npw','New Password','password')}${F('npw2','Confirm New Password','password')}<button class="btn w-full">Reset password</button></form><a class="lk block mt-3" href="#login">Back to sign in</a>`)};
+/* ===== PROTECTED PAGES ===== */
+const NAV=[['dashboard','Dashboard'],['transfer','Fund Transfer'],['beneficiaries','Beneficiaries'],['history','Transactions'],['services','Deposit / Withdraw'],['profile','Profile']];
+const stat=(l,v,c='')=>`<div class="card"><div class="mu">${l}</div><div class="text-xl font-bold ${c}">${v}</div></div>`;
+const PRO={
+dashboard(u){const mine=db.txs.filter(t=>t.uid===u.id&&t.status==='Success'&&t.cat==='Transfer');const sent=mine.filter(t=>t.type==='Debit').reduce((s,t)=>s+t.amt,0),rec=mine.filter(t=>t.type==='Credit').reduce((s,t)=>s+t.amt,0);const wk=db.txs.filter(t=>t.uid===u.id&&Date.now()-t.ts<7*864e5).length;
+return `<div class="grid gap-3 md:grid-cols-2"><div class="card"><div class="mu">Account Holder</div><div class="font-semibold">${esc(u.name)}</div><div class="mu mt-2">Account No. · Type · Branch · IFSC</div><div id="accno" class="font-mono text-sm">${mask(u.acc)} · ${u.type} · ${u.branch} · ${u.ifsc}</div></div>
+<div class="card"><div class="mu">Total Balance</div><div class="text-2xl font-bold" id="bal">${inr(u.balance)}</div><div class="mu mt-1">Available Balance</div><div class="font-semibold" id="avl">${inr(avail(u))}</div></div></div>
+<div class="grid gap-3 grid-cols-2 md:grid-cols-4 mt-3">${stat('Total Sent',inr(sent))}${stat('Total Received',inr(rec))}${stat('Activity (7 days)',wk)}${stat('All Transactions',db.txs.filter(t=>t.uid===u.id).length)}</div>
+<div class="card mt-3"><b>Recent activity</b><div class="overflow-x-auto"><table>${txRows(db.txs.filter(t=>t.uid===u.id).slice(-5).reverse())}</table></div></div>`},
+transfer(u){return `<div class="card max-w-xl"><h2 class="font-semibold">Fund Transfer</h2><div class="mu">Available: ${inr(avail(u))} · Transfers ≥ ${inr(LIM.pend)} go to Pending · Daily limit ${inr(LIM.daily)}</div><div id="msg" class="mt-2"></div><form id="fTx" novalidate><label class="lb" for="bsel">Saved beneficiary (optional)</label><select class="inp" id="bsel"><option value="">— choose —</option>${u.bn.map(b=>`<option value="${b.acc}">${esc(b.nick)} (${b.acc})</option>`).join('')}</select>${F('to','Recipient Account No. or Email')}${F('tAmt','Amount (₹)','text','inputmode="decimal"')}${F('rmk','Remarks (optional)','text','maxlength="40"')}<button class="btn mt-2">Review transfer</button></form></div>`},
+beneficiaries(u){return `<div class="grid gap-3 md:grid-cols-2"><div class="card"><h2 class="font-semibold">Add Beneficiary</h2><div id="msg" class="mt-2"></div><form id="fBn" novalidate>${F('bnick','Nickname')}${F('bacc','Account Number (must exist)')}${F('bifsc','IFSC / Routing Code')}<button class="btn mt-2">Add beneficiary</button></form></div><div class="card"><h2 class="font-semibold">Saved Beneficiaries (${u.bn.length})</h2>${u.bn.length?u.bn.map(b=>`<div class="flex justify-between items-center py-2" style="border-bottom:1px solid var(--bd)"><div><b>${esc(b.nick)}</b><div class="mu">${esc(b.name)} · ${b.acc} · ${b.ifsc}</div></div><button class="btn2" data-act="delbn" data-v="${b.acc}">Delete</button></div>`).join(''):'<div class="mu mt-2">No beneficiaries yet.</div>'}</div></div>`},
+history(u){return `<div class="card"><h2 class="font-semibold mb-2">Transaction History</h2><div class="grid gap-2 grid-cols-2 md:grid-cols-5" id="hf"><input class="inp" type="date" id="f1" aria-label="From date"><input class="inp" type="date" id="f2" aria-label="To date"><select class="inp" id="f3" aria-label="Type"><option value="">All types</option><option>Credit</option><option>Debit</option></select><select class="inp" id="f4" aria-label="Status"><option value="">All status</option><option>Success</option><option>Pending</option><option>Failed</option></select><input class="inp" id="f5" placeholder="Search ID / description" aria-label="Search"></div><div class="mu my-2">Pending rows have QA controls to simulate the bank’s batch job (settle / fail).</div><div class="overflow-x-auto"><table id="tb"></table></div></div>`},
+services(u){return `<div class="grid gap-3 md:grid-cols-2"><div class="card"><h2 class="font-semibold">Deposit (cash/cheque simulation)</h2><div class="mu">Max ${inr(LIM.maxDep)} per deposit</div><div id="msg" class="mt-2"></div><form id="fDep" novalidate>${F('dAmt','Amount (₹)','text','inputmode="decimal"')}<button class="btn">Deposit</button></form></div><div class="card"><h2 class="font-semibold">Withdraw (ATM simulation)</h2><div class="mu">Max ${inr(LIM.wd)} per withdrawal · min balance ${inr(LIM.minBal)} · Available ${inr(avail(u))}</div><form id="fWd" novalidate>${F('wAmt','Amount (₹)','text','inputmode="decimal"')}<button class="btn">Withdraw</button></form></div></div>`},
+profile(u){return `<div class="grid gap-3 md:grid-cols-2"><div class="card"><h2 class="font-semibold">Contact Details</h2><div class="mu">${esc(u.name)} · ${esc(u.email)} (not editable)</div><div id="msg" class="mt-2"></div><form id="fProf" novalidate>${F('pphone','Phone Number','tel','maxlength="10" value="'+esc(u.phone)+'"')}${F('paddr','Address','text','value="'+esc(u.addr)+'"')}<button class="btn">Save changes</button></form></div><div class="card"><h2 class="font-semibold">Change Password</h2><form id="fPw" novalidate>${F('cpw','Current Password','password')}${F('np','New Password','password')}${F('np2','Confirm New Password','password')}<button class="btn">Update password</button></form><h2 class="font-semibold mt-4">Notifications</h2><form id="fNt"><label class="block text-sm"><input type="checkbox" name="ne" ${u.notif.email?'checked':''}> Email alerts</label><label class="block text-sm"><input type="checkbox" name="ns" ${u.notif.sms?'checked':''}> SMS alerts</label><button class="btn2 mt-2">Save preferences</button></form></div></div>`}};
+function txRows(list){return '<thead><tr><th>Txn ID</th><th>Date</th><th>Description</th><th>Amount</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>'+(list.length?list.map(t=>`<tr><td>${t.id}</td><td>${dt(t.ts)}</td><td>${esc(t.desc)}</td><td style="color:var(${t.type==='Credit'?'--ok':'--er'})">${t.type==='Credit'?'+':'−'}${inr(t.amt)}</td><td>${t.type}</td><td><span class="bg ${t.status}">${t.status}</span></td><td>${t.status==='Pending'&&t.ref&&t.type==='Debit'?`<a class="lk" data-act="settle" data-v="${t.ref}">Settle</a> · <a class="lk" data-act="fail" data-v="${t.ref}">Fail</a>`:''}</td></tr>`).join(''):'<tr><td colspan="7" class="mu">No transactions found.</td></tr>')+'</tbody>'}
+function drawHist(){const u=cur(),g=i=>$('#'+i).value.trim().toLowerCase();if(!u||!$('#tb'))return;const a=g('f1'),b=g('f2'),ty=$('#f3').value,st=$('#f4').value,q=g('f5');
+const l=db.txs.filter(t=>t.uid===u.id).filter(t=>(!a||t.ts>=new Date(a+'T00:00:00'))&&(!b||t.ts<=new Date(b+'T23:59:59'))&&(!ty||t.type===ty)&&(!st||t.status===st)&&(!q||(t.id+t.desc).toLowerCase().includes(q))).reverse();
+$('#tb').innerHTML=(a&&b&&a>b?'':'')+txRows(l)}
+function shell(h,u){$('#app').innerHTML=`<div class="max-w-6xl mx-auto p-3 md:flex md:gap-4"><aside class="md:w-56 md:shrink-0"><div class="card mb-3"><div class="font-bold" style="color:var(--pr)">🏦 QA Bank</div><div class="mu">${esc(u.name)}</div></div><nav class="flex md:block gap-1 overflow-x-auto mb-3">${NAV.map(n=>`<a href="#${n[0]}" class="${n[0]===h?'on':''}">${n[1]}</a>`).join('')}<a data-act="logout" style="color:var(--er)">Logout</a></nav></aside><main class="flex-1 min-w-0"><h1 class="text-xl font-bold mb-3">${NAV.find(n=>n[0]===h)[1]}</h1>${PRO[h](u)}</main></div>`;if(h==='history')drawHist()}
+/* ===== ROUTER (guards protected routes; blocks back-button after logout) ===== */
+function route(){const h=location.hash.slice(1)||'login',u=cur();
+if(!u&&PRO[h]){history.replaceState(null,'','#login');return pub('login')}
+if(u&&PUB[h]){history.replaceState(null,'','#dashboard');return shell('dashboard',u)}
+if(u)return shell(PRO[h]?h:'dashboard',u);pub(PUB[h]?h:'login')}
+function pub(h){$('#app').innerHTML=PUB[h]();flash=null}
+/* ===== FORM HANDLERS ===== */
+const H={
+fLogin(f){const d=D(f),e=run({lid:d.lid,lpw:d.lpw},{lid:V.req,lpw:V.req});if(bad(f,e))return;const u=find(d.lid);
+if(!u)return msg('er','Invalid credentials.');
+if(u.locked)return msg('er','🔒 Account locked after 3 failed attempts. Use “Forgot password” to unlock.');
+if(u.pass!==hp(d.lpw)){u.failed++;if(u.failed>=3){u.locked=true;save();return msg('er','🔒 Account locked after 3 failed attempts. Use “Forgot password” to unlock.')}save();return msg('er',`Invalid credentials. ${3-u.failed} attempt(s) remaining before lockout.`)}
+u.failed=0;save();setS(u.id,!!d.rem);go('dashboard');route()},
+fReg(f){const d=D(f),e=run(d,{name:V.name,email:V.email,phone:V.phone,dob:V.dob,addr:V.addr,pw:V.pass,
+dep:v=>{const x=V.amt(v);return x!==true?x:(+v<LIM.minDep?'Minimum initial deposit is '+inr(LIM.minDep)+'.':+v>1e7?'Maximum initial deposit is ₹1,00,00,000.':true)},
+pw2:(v,o)=>v===o.pw||'Passwords do not match.'});
+if(!e.email&&db.users.some(u=>u.email===d.email.toLowerCase()))e.email='This email is already registered.';
+if(!e.phone&&db.users.some(u=>u.phone===d.phone))e.phone='This phone number is already registered.';
+if(bad(f,e))return;const u=mkUser(d);save();flash=['ok',`Account created! Your account number is <b>${u.acc}</b> with opening balance ${inr(u.balance)}. Please sign in.`];go('login');route()},
+fForgot(f){const d=D(f),e=run(d,{femail:V.email});if(bad(f,e))return;const u=find(d.femail);let box='';
+if(u){const t=String(Math.floor(1e5+Math.random()*9e5));db.resets[u.email]={t,exp:Date.now()+6e5};save();box=`<div class="card mt-3" style="border-style:dashed"><div class="mu">📧 Simulated inbox — To: ${esc(u.email)}</div><div class="text-sm mt-1">Your reset token is <b id="tokv" class="font-mono">${t}</b> (expires in 10 min).</div></div>`}
+msg('ok','If that email is registered, a reset token has been sent.');$('#inbox').innerHTML=box},
+fReset(f){const d=D(f),e=run(d,{remail:V.email,tok:v=>/^\d{6}$/.test(v)||'Token must be 6 digits.',npw:V.pass,npw2:(v,o)=>v===o.npw||'Passwords do not match.'});if(bad(f,e))return;
+const u=find(d.remail),r=u&&db.resets[u.email];if(!r||r.t!==d.tok)return msg('er','Invalid token or email.');if(Date.now()>r.exp)return msg('er','Token expired. Request a new one.');
+if(u.pass===hp(d.npw))return E(f,{npw:'New password must differ from the old one.'});
+u.pass=hp(d.npw);u.failed=0;u.locked=false;delete db.resets[u.email];save();flash=['ok','Password reset. Account unlocked — please sign in.'];go('login');route()},
+fTx(f){const u=cur(),d=D(f),e=run(d,{to:V.req,tAmt:V.amt}),r=d.to?find(d.to):null;
+if(!e.to&&!r)e.to='Recipient account or username not found.';else if(r&&r.id===u.id)e.to='You cannot transfer to your own account.';
+const n=+d.tAmt;if(!e.tAmt&&n>avail(u))e.tAmt='Insufficient funds. Available balance: '+inr(avail(u));
+if(bad(f,e))return;
+const today=db.txs.filter(t=>t.uid===u.id&&t.cat==='Transfer'&&t.type==='Debit'&&t.status!=='Failed'&&new Date(t.ts).toDateString()===new Date().toDateString()).reduce((s,t)=>s+t.amt,0);
+if(today+n>LIM.daily){addTx(u.id,'Transfer to '+r.name+' (limit exceeded)',n,'Debit','Transfer','Failed');save();return msg('er','Daily transfer limit of '+inr(LIM.daily)+' exceeded. The attempt was logged as Failed.')}
+ask(`Send <b>${inr(n)}</b> to <b>${esc(r.name)}</b> (${r.acc})?${n>=LIM.pend?'<br><span class="mu">Large transfer: will be held as Pending.</span>':''}`,()=>{
+const ref='R'+db.seq,st=n>=LIM.pend?'Pending':'Success',note=d.rmk?' – '+d.rmk:'';
+addTx(u.id,'Transfer to '+r.name+note,n,'Debit','Transfer',st,ref);addTx(r.id,'Transfer from '+u.name+note,n,'Credit','Transfer',st,ref);
+if(st==='Success'){u.balance-=n;r.balance+=n}save();flash=null;go('dashboard');route()})},
+fBn(f){const u=cur(),d=D(f);d.bifsc=d.bifsc.toUpperCase();d.bacc=d.bacc.toUpperCase();const e=run(d,{bnick:V.req,bacc:V.req,bifsc:V.ifsc}),r=d.bacc?db.users.find(x=>x.acc===d.bacc):null;
+if(!e.bacc&&!r)e.bacc='Account number does not exist in the system.';else if(r&&r.id===u.id)e.bacc='You cannot add your own account.';else if(r&&u.bn.some(b=>b.acc===r.acc))e.bacc='Beneficiary already added.';
+if(bad(f,e))return;u.bn.push({acc:r.acc,name:r.name,nick:d.bnick,ifsc:d.bifsc});save();flash=null;route();msg('ok','Beneficiary added.')},
+fDep(f){const u=cur(),d=D(f),e=run(d,{dAmt:v=>{const x=V.amt(v);return x!==true?x:(+v>LIM.maxDep?'Maximum per deposit is '+inr(LIM.maxDep)+'.':true)}});if(bad(f,e))return;
+u.balance+=+d.dAmt;addTx(u.id,'Cash deposit',+d.dAmt,'Credit','Deposit','Success');save();route();msg('ok','Deposited '+inr(+d.dAmt)+'. New balance: '+inr(u.balance))},
+fWd(f){const u=cur(),d=D(f),e=run(d,{wAmt:v=>{const x=V.amt(v);if(x!==true)return x;if(+v>LIM.wd)return'Maximum per withdrawal is '+inr(LIM.wd)+'.';if(+v>avail(u))return'Insufficient funds. Available: '+inr(avail(u));return avail(u)-+v<LIM.minBal?'Minimum balance of '+inr(LIM.minBal)+' must be maintained.':true}});if(bad(f,e))return;
+u.balance-=+d.wAmt;addTx(u.id,'ATM withdrawal',+d.wAmt,'Debit','Withdrawal','Success');save();route();msg('ok','Withdrew '+inr(+d.wAmt)+'. New balance: '+inr(u.balance))},
+fProf(f){const u=cur(),d=D(f),e=run(d,{pphone:V.phone,paddr:V.addr});if(!e.pphone&&db.users.some(x=>x.id!==u.id&&x.phone===d.pphone))e.pphone='Phone number already in use.';if(bad(f,e))return;u.phone=d.pphone;u.addr=d.paddr;save();msg('ok','Profile updated.')},
+fPw(f){const u=cur(),d=D(f),e=run(d,{cpw:V.req,np:V.pass,np2:(v,o)=>v===o.np||'Passwords do not match.'});if(!e.cpw&&u.pass!==hp(d.cpw))e.cpw='Current password is incorrect.';if(!e.np&&hp(d.np)===u.pass)e.np='New password must differ from the current one.';if(bad(f,e))return;u.pass=hp(d.np);save();f.reset();msg('ok','Password changed.')},
+fNt(f){const u=cur(),d=D(f);u.notif={email:'ne' in d,sms:'ns' in d};save();msg('ok','Notification preferences saved.')}};
+document.addEventListener('submit',e=>{e.preventDefault();const h=H[e.target.id];if(h)h(e.target)});
+document.addEventListener('input',e=>{if(e.target.closest('#hf'))drawHist()});
+document.addEventListener('change',e=>{if(e.target.id==='bsel'&&$('#to'))$('#to').value=e.target.value;if(e.target.closest('#hf'))drawHist()});
+document.addEventListener('click',e=>{const a=e.target.closest('[data-act]');if(!a)return;const v=a.dataset.v;
+({logout(){clrS();history.replaceState(null,'','#login');location.replace('#login');route()},
+reset(){ask('Reset all demo data and sign out everyone?',()=>{clrS();seed();flash=['ok','Demo data reset.'];go('login');route()})},
+settle(){settle(v,true);route()},fail(){settle(v,false);route()},
+delbn(){ask('Delete this beneficiary?',()=>{const u=cur();u.bn=u.bn.filter(b=>b.acc!==v);save();route()})}})[a.dataset.act]()});
+addEventListener('hashchange',route);addEventListener('pageshow',route);
+load();route();
+</script></body></html>
